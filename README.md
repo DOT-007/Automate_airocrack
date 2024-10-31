@@ -11,12 +11,16 @@ Make the script executable:
 
 bash
 Copy code
+```
 chmod +x airo.sh
+```
 Run the script:
 
 bash
 Copy code
+```
 ./airo.sh
+```
 Note: Only use this script on networks where you have authorization. Unauthorized access to networks is illegal.
 
 
